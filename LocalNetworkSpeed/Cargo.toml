@@ -1,5 +1,5 @@
 [package]
-name = "LocalNetworkSpeed"
+name = "local_network_speed"
 version = "0.1.0"
 authors = ["Michael <v.mi@gmx.de>"]
 edition = "2018"
