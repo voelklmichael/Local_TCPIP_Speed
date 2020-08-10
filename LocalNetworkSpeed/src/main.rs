@@ -1,106 +1,137 @@
 use std::io::{Read, Write};
+//use std::net::{TcpListener, TcpStream};
+use mio::net::{TcpListener, TcpStream};
 
-const N: usize = 15;
-fn server(address: &str, start_time: std::time::Instant) {
+const N: usize = 12;
+const NODELAY: bool = true;
+
+fn read(stream: &mut TcpStream, msg: &str) {
+    let mut response = [0; 1];
+    loop {
+        match stream.read(&mut response) {
+            Ok(1) => {
+                if response[0] == 42 {
+                    break;
+                } else {
+                    panic!("Wrong message @ {:?}", msg)
+                }
+            }
+            Ok(0) => continue,
+            Ok(n) => panic!("Wrong message length {:} @ {:}", n, msg),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(e) => panic!(e),
+        }
+    }
+}
+
+fn server_startup(address: &str) -> Vec<std::time::Instant> {
+    let mut times = Vec::with_capacity(3 * N + 4);
+    let address: std::net::SocketAddr = address.parse().expect("Failed to parse");
     // startup server
-    let mut server = std::net::TcpListener::bind(address)
-        .expect("Failed to setup server")
-        .accept()
-        .expect("Failed to setup sever @ step 2")
-        .0;
-    server
-        .set_nodelay(true)
-        .expect("Failed to set no_delay @ server");
-
-    // 10x send message
-    for _ in 0..N {
-        // read answer
-        let mut response = [0; 16];
-        let mut read_bytes = 0;
+    times.push(std::time::Instant::now());
+    let mut server;
+    {
+        let server_ = TcpListener::bind(address).expect("Failed to setup server");
         loop {
-            read_bytes += server
-                .read(&mut response[read_bytes..])
-                .expect("Failed to read @ server");
-            if read_bytes == 16
-            /* 16=128/8 */
-            {
-                break;
-            } else if read_bytes > 16 {
-                panic!("Too many data read")
+            match server_.accept() {
+                Ok((s, _)) => {
+                    server = s;
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) => panic!(e),
             }
         }
-        let answer = u128::from_le_bytes(response);
-        // write current time
-        let now = std::time::Instant::now();
-        let elapsed_nanos: u128 = (now - start_time).as_nanos();
-        server
-            .write(&elapsed_nanos.to_le_bytes())
-            .expect("Failed to write @ client");
     }
+
+    times.push(std::time::Instant::now());
+    server
+        .set_nodelay(NODELAY)
+        .expect("Failed to set no_delay @ server");
+    times.push(std::time::Instant::now());
+
+    // 10x send message
+    for _i in 0..N {
+        times.push(std::time::Instant::now());
+        // read answer
+        read(&mut server, "server");
+        // write
+        times.push(std::time::Instant::now());
+        server.write(&[42]).expect("Failed to write @ server");
+        times.push(std::time::Instant::now());
+    }
+    times.push(std::time::Instant::now());
+
+    times
+}
+
+fn client_startup(address: &str) -> Vec<std::time::Instant> {
+    let mut times = Vec::with_capacity(3 * N + 4);
+    let address: std::net::SocketAddr = address.parse().expect("Failed to parse");
+    // startup server
+    times.push(std::time::Instant::now());
+    let mut client = TcpStream::connect(address).expect("Failed to setup client");
+    times.push(std::time::Instant::now());
+    client
+        .set_nodelay(NODELAY)
+        .expect("Failed to set no_delay @ client");
+    times.push(std::time::Instant::now());
+
+    // 10x send message
+    for _i in 0..N {
+        // write
+        times.push(std::time::Instant::now());
+        client.write(&[42]).expect("Failed to write @ client");
+        times.push(std::time::Instant::now());
+        // read answer
+        read(&mut client, "client");
+        times.push(std::time::Instant::now());
+    }
+    times.push(std::time::Instant::now());
+
+    times
 }
 
 fn main() {
     let address = "127.0.0.1:42042";
-    let start_time = std::time::Instant::now();
 
-    let thread = std::thread::spawn(move || server(address, start_time));
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    let server_thread = std::thread::spawn(move || server_startup(address));
+    std::thread::sleep(std::time::Duration::from_millis(250));
 
-    // connect client
-    let mut client = std::net::TcpStream::connect(address).expect("Failed to setup client");
-    client
-        .set_nodelay(true)
-        .expect("Failed to set no_delay @ client");
+    let client_thread = std::thread::spawn(move || client_startup(address));
 
-    // 10x send message
-    let mut times = Vec::with_capacity(N * 2);
-    for _ in 0..N {
-        // write current time
-        let now = std::time::Instant::now();
-        let elapsed_nanos: u128 = (now - start_time).as_nanos();
-        times.push(elapsed_nanos);
-        client
-            .write(&elapsed_nanos.to_le_bytes())
-            .expect("Failed to write @ client");
-        let mut response = [0; 16];
-        let mut read_bytes = 0;
-        // read answer
-        loop {
-            read_bytes += client
-                .read(&mut response[read_bytes..])
-                .expect("Failed to read @ client");
-            if read_bytes == 16
-            /* 16=128/8 */
-            {
-                break;
-            } else if read_bytes > 16 {
-                panic!("Too many data read")
-            }
-        }
-        let answer = u128::from_le_bytes(response);
-        times.push(answer);
-    }
-    // add final time
-    {
-        let now = std::time::Instant::now();
-        let elapsed_nanos: u128 = (now - start_time).as_nanos();
-        times.push(elapsed_nanos);
-    }
-
-    thread.join().expect("Failed to join threads");
+    let server_times = server_thread
+        .join()
+        .expect("Failed to join thread for sverer");
+    let client_times = client_thread
+        .join()
+        .expect("Failed to join thread for client");
     println!("------ Evaluation -----");
+    assert_eq!(client_times.len(), server_times.len());
+
     for i in 0..N {
-        let start_time = times[i * 2];
-        //let client_write = times[i * 2] - start_time;
-        let server_write = times[i * 2 + 1] - start_time;
-        let client_next = times[i * 2 + 2] - start_time;
-        /*println!(
-            "{:02}: Client: {:06} - Server: {:06} - Client: {:06}",
-            i, client_write, server_write, client_next
-        )*/
-        println!(
-            "{:02}: Server: {:05} - Client: {:05}",
-            i, server_write, client_next
-        )
+        let cs = &client_times[3 + i * 3..3 + i * 3 + 3];
+        let ss = &server_times[3 + i * 3..3 + i * 3 + 3];
+        let client_write = (cs[1] - cs[0]).as_nanos();
+        let client_read = (cs[2] - cs[1]).as_nanos();
+        let client_total = (cs[2] - cs[0]).as_nanos();
+        let server_write = (ss[1] - ss[0]).as_nanos();
+        let server_read = (ss[2] - ss[1]).as_nanos();
+        let server_total = (ss[2] - ss[0]).as_nanos();
+        let cs = [client_write, client_read, client_total];
+        let ss = [server_write, server_read, server_total];
+        println!("{:?}, {:?}", cs, ss);
+        /*
+        let client_start = client_times[3]
+        let start_time = client_times[3 + i * 3];
+        let s = server_times[3 + i * 3..3 + i * 3 + 3]
+            .into_iter()
+            .map(|x| (*x - start_time).as_nanos());
+        let c = client_times[3 + i * 3..3 + i * 3 + 3]
+            .into_iter()
+            .map(|x| (*x - start_time).as_nanos());
+        let x = s.zip(c).collect::<Vec<_>>();
+        dbg!(x);
+        */
     }
 }
