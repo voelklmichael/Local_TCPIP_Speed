@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 
-const N: usize = 15;
+const N: usize = 500;
 fn server(address: &str, start_time: std::time::Instant) {
     // startup server
     let mut server = std::net::TcpListener::bind(address)

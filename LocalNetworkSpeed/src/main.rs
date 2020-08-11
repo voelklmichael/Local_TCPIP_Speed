@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 //use std::net::{TcpListener, TcpStream};
 use mio::net::{TcpListener, TcpStream};
 
-const N: usize = 12;
+const N: usize = 250;
 const NODELAY: bool = true;
 
 fn read(stream: &mut TcpStream, msg: &str) {
